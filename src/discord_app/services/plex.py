@@ -127,7 +127,7 @@ class PlexClient:
         return False
 
 
-    async def search_series(self, query: str) -> list[dict]:
+    async def search_series2(self, query: str) -> list[dict]:
         params = self._auth_params()
         if self.shows_section_id:
             url = f"{self.base_url}/library/sections/{self.shows_section_id}/all"
@@ -139,7 +139,7 @@ class PlexClient:
         r.raise_for_status()
         return self._parse_metadata_list(r.text)
 
-    async def series_exists(self, *, tvdb_id: int | None = None, tmdb_id: int | None = None, title: str | None = None, year: int | None = None) -> bool:
+    async def series_exists2(self, *, tvdb_id: int | None = None, tmdb_id: int | None = None, title: str | None = None, year: int | None = None) -> bool:
         q = title or ""
         if not q and tmdb_id:
             q = str(tmdb_id)

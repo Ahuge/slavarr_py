@@ -24,7 +24,6 @@ class SlavarrBot(commands.Bot):
 
     async def setup_hook(self):
         # register slash commands globally
-        self.tree.copy_global_to(guild=None)
         await self.tree.sync()
         # Log invite URL
         perms = discord.Permissions(permissions=self.settings.invite_permissions)
@@ -219,10 +218,11 @@ class ContentCommands(commands.Cog):
                             if r.tvdbId: plex_already_tvdb.add(r.tvdbId)
                             if r.tmdbId: plex_already_tmdb.add(r.tmdbId)
                     except Exception:
-                        pass
+                        import traceback
+                        traceback.print_exc()
             # merge sets for marking
-            merged_tvdb = already_tvdb.union(plex_already_tvdb)
-            merged_tmdb = already_tmdb.union(plex_already_tmdb)
+            merged_tvdb = already_tvdb.intersection(plex_already_tvdb)
+            merged_tmdb = already_tmdb.intersection(plex_already_tmdb)
             view = SeriesSelectView(results, merged_tvdb, merged_tmdb, monitored=True)
             await interaction.followup.send("Pick a result:", view=view, ephemeral=True)
         except Exception as e:
