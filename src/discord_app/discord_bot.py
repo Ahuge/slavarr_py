@@ -79,13 +79,27 @@ class MovieSelectView(discord.ui.View):
         if tmdb_id in self.already:
             await interaction.followup.send("ℹ️ That movie is already in Radarr.", ephemeral=True)
             return
-        try:
-            data = await bot.radarr.add_movie(tmdb_id, monitored=bot.settings.radarr_monitor)
-            title = data.get("title") or "Movie"
-            await interaction.followup.send(f"✅ Added **{title}** (tmdb:{tmdb_id}) to Radarr.", ephemeral=True)
-        except Exception as e:
-            log.exception("Failed to add movie: %s", e)
-            await interaction.followup.send("❌ Failed to add the selected movie (it might already exist or Radarr refused).", ephemeral=True)
+        # try:
+        #     data = await bot.radarr.add_movie(tmdb_id, monitored=bot.settings.radarr_monitor)
+        #     title = data.get("title") or "Movie"
+        #     await interaction.followup.send(f"✅ Added **{title}** (tmdb:{tmdb_id}) to Radarr.", ephemeral=True)
+        # except Exception as e:
+        #     log.exception("Failed to add movie: %s", e)
+        #     await interaction.followup.send("❌ Failed to add the selected movie (it might already exist or Radarr refused).", ephemeral=True)
+       # Start quality selection flow (no root folder prompt)
+        view = QualityOnlyMovieView(tmdb_id)
+        # First response already deferred; send a followup with components
+        profiles = await bot.radarr.list_quality_profiles()
+        select = QualitySelect(profiles, kind="movie", payload={"tmdb_id": tmdb_id})
+        view.clear_items()
+        view.add_item(select)
+        await interaction.followup.send("Pick a quality profile:", view=view, ephemeral=True)
+
+
+class QualityOnlyMovieView(discord.ui.View):
+    def __init__(self, tmdb_id: int, timeout: float | None = 120.0):
+        super().__init__(timeout=timeout)
+        self.tmdb_id = tmdb_id
 
 # ===== Series Flow =====
 
@@ -136,13 +150,20 @@ class SeriesSelectView(discord.ui.View):
         if exists:
             await interaction.followup.send("ℹ️ That series is already in Sonarr.", ephemeral=True)
             return
-        try:
-            data = await bot.sonarr.add_series(tvdb_id, tmdb_id, monitored=bot.settings.sonarr_monitor if hasattr(bot.settings,'sonarr_monitor') else True)
-            title = data.get("title") or "Series"
-            await interaction.followup.send(f"✅ Added **{title}** to Sonarr.", ephemeral=True)
-        except Exception as e:
-            log.exception("Failed to add series: %s", e)
-            await interaction.followup.send("❌ Failed to add the selected series (it might already exist or Sonarr refused).", ephemeral=True)
+        # try:
+        #     data = await bot.sonarr.add_series(tvdb_id, tmdb_id, monitored=bot.settings.sonarr_monitor if hasattr(bot.settings,'sonarr_monitor') else True)
+        #     title = data.get("title") or "Series"
+        #     await interaction.followup.send(f"✅ Added **{title}** to Sonarr.", ephemeral=True)
+        # except Exception as e:
+        #     log.exception("Failed to add series: %s", e)
+        #     await interaction.followup.send("❌ Failed to add the selected series (it might already exist or Sonarr refused).", ephemeral=True)
+       # Start quality selection flow (no root folder prompt)
+        view = QualityOnlySeriesView(tvdb_id, tmdb_id)
+        profiles = await bot.sonarr.list_quality_profiles()
+        select = QualitySelect(profiles, kind="series", payload={"tvdb_id": tvdb_id, "tmdb_id": tmdb_id})
+        view.clear_items()
+        view.add_item(select)
+        await interaction.followup.send("Pick a quality profile:", view=view, ephemeral=True)
 
 class ContentCommands(commands.Cog):
     def __init__(self, bot: SlavarrBot):
@@ -234,3 +255,48 @@ async def create_bot(settings: Settings) -> SlavarrBot:
     bot = SlavarrBot(settings=settings)
     await bot.add_cog(ContentCommands(bot))
     return bot
+
+class QualityOnlySeriesView(discord.ui.View):
+    def __init__(self, tvdb_id: int | None, tmdb_id: int | None, timeout: float | None = 120.0):
+        super().__init__(timeout=timeout)
+        self.tvdb_id = tvdb_id
+        self.tmdb_id = tmdb_id
+
+class QualitySelect(discord.ui.Select):
+    def __init__(self, profiles: list[dict], kind: str, payload: dict):
+        self.kind = kind
+        self.payload = payload  # carries tmdb_id or tvdb/tmdb ids
+        options = [discord.SelectOption(label=p["name"][:100], value=str(p["id"])) for p in profiles[:25]]
+        super().__init__(placeholder="Choose a quality profile…", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        assert isinstance(interaction.client, SlavarrBot)
+        bot: SlavarrBot = interaction.client
+        qid = int(self.values[0])
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            if self.kind == "movie":
+                tmdb_id = self.payload["tmdb_id"]
+                data = await bot.radarr.add_movie(
+                    tmdb_id=tmdb_id,
+                    quality_profile_id=qid,
+                    root_folder_path=bot.settings.radarr_root_folder,
+                    monitored=bot.settings.radarr_monitor,
+                )
+                title = data.get("title") or "Movie"
+                await interaction.followup.send(f"✅ Added **{title}** (tmdb:{tmdb_id}) to Radarr.", ephemeral=True)
+            else:
+                tvdb_id = self.payload.get("tvdb_id")
+                tmdb_id = self.payload.get("tmdb_id")
+                data = await bot.sonarr.add_series(
+                    tvdb_id=tvdb_id,
+                    tmdb_id=tmdb_id,
+                    quality_profile_id=qid,
+                    root_folder_path=bot.settings.sonarr_root_folder,
+                    monitored=bot.settings.sonarr_monitor if hasattr(bot.settings,'sonarr_monitor') else True,
+                )
+                title = data.get("title") or "Series"
+                await interaction.followup.send(f"✅ Added **{title}** to Sonarr.", ephemeral=True)
+        except Exception as e:
+            log.exception("Add failed: %s", e)
+            await interaction.followup.send("❌ Add failed (check quality profile or *arr config).", ephemeral=True)

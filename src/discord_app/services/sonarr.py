@@ -35,6 +35,21 @@ class SonarrClient:
             ))
         return results
 
+    async def list_quality_profiles(self) -> list[dict]:
+      url = f"{self.base_url}/api/v3/qualityprofile"
+      headers = {"X-Api-Key": self.api_key}
+      r = await self._client.get(url, headers=headers)
+      r.raise_for_status()
+      return r.json()
+
+    async def list_root_folders(self) -> list[dict]:
+      # Kept for completeness; we won't prompt users. Uses env setting instead.
+      url = f"{self.base_url}/api/v3/rootfolder"
+      headers = {"X-Api-Key": self.api_key}
+      r = await self._client.get(url, headers=headers)
+      r.raise_for_status()
+      return r.json()
+
     async def add_series(self, tvdb_id: int | None, tmdb_id: int | None, quality_profile_id: int = 1, root_folder_path: str = "/tv", monitored: bool = True) -> Dict[str, Any]:
         # Sonarr requires full series body; we'll refetch the series by lookup first
         headers = {"X-Api-Key": self.api_key}

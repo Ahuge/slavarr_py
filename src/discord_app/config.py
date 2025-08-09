@@ -19,6 +19,9 @@ class Settings(BaseModel):
     db_path: str = "/app/data/slavarr.db"
     port: int = 3001
     invite_permissions: int = 414464720896  # adjust as needed
+    # Root folders (used automatically; no UI prompts)
+    sonarr_root_folder: str = "/tv"
+    radarr_root_folder: str = "/movies"
 
 def load_settings() -> Settings:
     # Simple env loader; defer to dotenv if present
@@ -33,6 +36,8 @@ def load_settings() -> Settings:
         sonarr_url=os.getenv("SONARR_URL"),
         sonarr_api_key=os.getenv("SONARR_API_KEY"),
         sonarr_monitor=os.getenv("SONARR_MONITOR","true").lower() == "true",
+        sonarr_root_folder=os.getenv("SONARR_ROOT_FOLDER","/tv"),
+        radarr_root_folder=os.getenv("RADARR_ROOT_FOLDER","/movies"),
         bot_max_content=int(os.getenv("BOT_MAX_CONTENT","10")),
         db_path=os.getenv("DB_PATH","/app/data/slavarr.db"),
         port=int(os.getenv("PORT","3001")),

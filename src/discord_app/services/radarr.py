@@ -35,6 +35,13 @@ class RadarrClient:
             ))
         return results
 
+    async def list_quality_profiles(self) -> list[dict]:
+        url = f"{self.base_url}/api/v3/qualityprofile"
+        headers = {"X-Api-Key": self.api_key}
+        r = await self._client.get(url, headers=headers)
+        r.raise_for_status()
+        return r.json()
+
     async def get_existing_by_tmdb(self, tmdb_id: int):
         url = f"{self.base_url}/api/v3/movie"
         headers = {"X-Api-Key": self.api_key}
