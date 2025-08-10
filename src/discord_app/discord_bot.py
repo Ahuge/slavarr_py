@@ -9,6 +9,8 @@ from discord_app.services.radarr import RadarrClient, MovieResult
 from discord_app.services.plex import PlexClient
 from discord_app.services.sonarr import SonarrClient, SeriesResult
 
+from discord_app.services.transmission import TransmissionClient
+
 log = logging.getLogger(__name__)
 
 class SlavarrBot(commands.Bot):
@@ -19,6 +21,9 @@ class SlavarrBot(commands.Bot):
         self.radarr = RadarrClient(settings.radarr_url, settings.radarr_api_key)
         self.plex = PlexClient(settings.plex_url, settings.plex_token, settings.plex_movies_section_id, settings.plex_shows_section_id) if getattr(settings,'plex_url',None) and getattr(settings,'plex_token',None) else None
         self.sonarr = SonarrClient(settings.sonarr_url, settings.sonarr_api_key) if getattr(settings, "sonarr_url", None) else None
+        self.transmission = None
+        if settings.transmission_url:
+            self.transmission = TransmissionClient(settings.transmission_url, settings.transmission_user, settings.transmission_password)
         self.engine = init_engine(settings.db_path)
         self.Session = make_session_factory(self.engine)
 
@@ -249,6 +254,121 @@ class ContentCommands(commands.Cog):
         except Exception as e:
             log.exception("Search failed: %s", e)
             await interaction.followup.send("Search failed. Check Sonarr settings.", ephemeral=True)
+
+    @app_commands.command(name="movie_status", description="Check the status of a movie in Radarr (and Transmission if downloading)")
+    @app_commands.describe(query="Movie title to check")
+    async def movie_status(self, interaction: discord.Interaction, query: str):
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            results = await self.bot.radarr.search_movies(query)
+        except Exception as e:
+            log.exception("Radarr search failed: %s", e)
+            await interaction.followup.send("Radarr search failed.", ephemeral=True)
+            return
+        if not results:
+            await interaction.followup.send("No movies found.", ephemeral=True)
+            return
+        m = results[0]
+        movie = await self.bot.radarr.get_movie_by_tmdb(m.tmdbId) if m.tmdbId else None
+        if not movie:
+            await interaction.followup.send("Not in Radarr yet.", ephemeral=True)
+            return
+        movie_id = movie["id"]
+        downloaded = bool(movie.get("movieFile"))
+        queue = await self.bot.radarr.get_queue()
+        q = self.bot.radarr.summarize_queue_progress(queue, movie_id)
+        t_line = None
+        if q and self.bot.transmission and q.get("downloadId"):
+            try:
+                t = await self.bot.transmission.get_by_hash(q["downloadId"])
+                if t:
+                    t_line = f"{self.bot.transmission.human_status(t)} | {(t.get('percentDone',0.0)*100):.1f}% | {t.get('rateDownload',0)} B/s | eta {t.get('eta','?')}"
+            except Exception:
+                pass
+        color = 0x2ecc71 if downloaded else (0xf39c12 if q else 0x95a5a6)
+        embed = discord.Embed(title=f"{movie.get('title')} ({movie.get('year')})", color=color)
+        state = "✅ Downloaded" if downloaded else ("⬇️ Downloading" if q else "❌ Missing")
+        embed.add_field(name="State", value=state, inline=False)
+        if q:
+            pct = None
+            if q.get("size"):
+                try:
+                    pct = 100 * (1 - (q.get("sizeleft",0)/q.get("size",1)))
+                except Exception:
+                    pct = None
+            qline = f"{q.get('status','queue')}"
+            if pct is not None:
+                qline += f" | {pct:.1f}%"
+            if q.get("timeleft"):
+                qline += f" | time left {q.get('timeleft')}"
+            embed.add_field(name="Queue", value=qline, inline=False)
+        if t_line:
+            embed.add_field(name="Transmission", value=t_line, inline=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="series_status", description="Check the status of a series in Sonarr (and Transmission if downloading)")
+    @app_commands.describe(query="Series title to check")
+    async def series_status(self, interaction: discord.Interaction, query: str):
+        if not self.bot.sonarr:
+            await interaction.response.send_message("Sonarr is not configured.", ephemeral=True)
+            return
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            results = await self.bot.sonarr.search_series(query)
+        except Exception as e:
+            log.exception("Sonarr search failed: %s", e)
+            await interaction.followup.send("Sonarr search failed.", ephemeral=True)
+            return
+        if not results:
+            await interaction.followup.send("No series found.", ephemeral=True)
+            return
+        s = results[0]
+        series = await self.bot.sonarr.get_series_by_tvdb_or_tmdb(s.tvdbId, s.tmdbId)
+        if not series:
+            await interaction.followup.send("Not in Sonarr yet.", ephemeral=True)
+            return
+        series_id = series["id"]
+        stats = self.bot.sonarr.summarize_series_progress(series)
+        q_items = await self.bot.sonarr.get_queue()
+        q_for_series = self.bot.sonarr.summarize_queue_for_series(q_items, series_id)
+        t_line = None
+        if q_for_series and self.bot.transmission:
+            for qi in q_for_series:
+                thash = qi.get("downloadId")
+                if not thash:
+                    continue
+                try:
+                    t = await self.bot.transmission.get_by_hash(thash)
+                    if t:
+                        t_line = f"{self.bot.transmission.human_status(t)} | {(t.get('percentDone',0.0)*100):.1f}% | {t.get('rateDownload',0)} B/s | eta {t.get('eta','?')}"
+                        break
+                except Exception:
+                    pass
+        pct = stats.get("percentOfEpisodes") or 0
+        color = 0x2ecc71 if pct >= 99.9 else (0xf39c12 if q_for_series else 0x95a5a6)
+        embed = discord.Embed(title=series.get("title"), color=color)
+        embed.add_field(
+            name="Progress",
+            value=f"{stats.get('episodeFileCount',0)}/{stats.get('totalEpisodeCount',0)} episodes ({pct:.1f}%)",
+            inline=False
+        )
+        if q_for_series:
+            first = q_for_series[0]
+            pct_q = None
+            if first.get("size"):
+                try:
+                    pct_q = 100 * (1 - (first.get("sizeleft",0)/first.get("size",1)))
+                except Exception:
+                    pct_q = None
+            qline = f"{first.get('status','queue')}"
+            if pct_q is not None:
+                qline += f" | {pct_q:.1f}%"
+            if first.get("timeleft"):
+                qline += f" | time left {first.get('timeleft')}"
+            embed.add_field(name="Queue", value=qline, inline=False)
+        if t_line:
+            embed.add_field(name="Transmission", value=t_line, inline=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 async def create_bot(settings: Settings) -> SlavarrBot:
     global bot

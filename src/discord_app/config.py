@@ -23,6 +23,11 @@ class Settings(BaseModel):
     sonarr_root_folder: str = "/tv"
     radarr_root_folder: str = "/movies"
 
+    # Transmission (optional)
+    transmission_url: str | None = None
+    transmission_user: str | None = None
+    transmission_password: str | None = None
+
 def load_settings() -> Settings:
     # Simple env loader; defer to dotenv if present
     from dotenv import load_dotenv
@@ -47,4 +52,7 @@ def load_settings() -> Settings:
         plex_movies_section_id=int(os.getenv("PLEX_MOVIES_SECTION_ID")) if os.getenv("PLEX_MOVIES_SECTION_ID") else None,
         plex_shows_section_id=int(os.getenv("PLEX_SHOWS_SECTION_ID")) if os.getenv("PLEX_SHOWS_SECTION_ID") else None,
         plex_series_section_id=int(os.getenv("PLEX_SERIES_SECTION_ID")) if os.getenv("PLEX_SERIES_SECTION_ID") else None,
+        transmission_url=os.getenv("TRANSMISSION_URL"),
+        transmission_user = os.getenv("TRANSMISSION_USER"),
+        transmission_password = os.getenv("TRANSMISSION_PASSWORD"),
     )

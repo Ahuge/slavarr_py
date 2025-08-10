@@ -42,6 +42,50 @@ class RadarrClient:
         r.raise_for_status()
         return r.json()
 
+    async def get_movie_by_tmdb(self, tmdb_id: int) -> dict | None:
+        """Return the Radarr movie (library item) for a TMDB id, or None."""
+        url = f"{self.base_url}/api/v3/movie"
+        headers = {"X-Api-Key": self.api_key}
+        r = await self._client.get(url, headers=headers, params={"tmdbId": tmdb_id})
+        r.raise_for_status()
+        data = r.json()
+        return data[0] if data else None
+
+    async def get_queue(self) -> list[dict]:
+        """Get current download queue; tolerate either {records:[...]} or raw list."""
+        url = f"{self.base_url}/api/v3/queue"
+        headers = {"X-Api-Key": self.api_key}
+        r = await self._client.get(url, headers=headers)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("records", data) if isinstance(data, dict) else data
+
+    async def get_history_for_movie(self, movie_id: int, page_size: int = 10) -> list[dict]:
+        """Recent history for a given movie id."""
+        url = f"{self.base_url}/api/v3/history/movie"
+        headers = {"X-Api-Key": self.api_key}
+        params = {"movieId": movie_id, "pageSize": page_size, "includeMovie": "true"}
+        r = await self._client.get(url, headers=headers, params=params)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("records", data) if isinstance(data, dict) else data
+
+    @staticmethod
+    def summarize_queue_progress(q_items: list[dict], movie_id: int) -> dict | None:
+        for it in q_items:
+            if it.get("movieId") == movie_id:
+                return {
+                    "progress": it.get("sizeleft", 0.0),
+                    "size": it.get("size", 0.0),
+                    "status": it.get("status"),
+                    "title": it.get("title"),
+                    "downloadId": it.get("downloadId"),
+                    "timeleft": it.get("timeleft"),
+                    "protocol": it.get("protocol"),
+                    "trackedDownloadStatus": it.get("trackedDownloadStatus"),
+                }
+        return None
+
     async def get_existing_by_tmdb(self, tmdb_id: int):
         url = f"{self.base_url}/api/v3/movie"
         headers = {"X-Api-Key": self.api_key}
