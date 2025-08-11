@@ -220,34 +220,15 @@ class SeriesSelectView(discord.ui.View):
         assert isinstance(interaction.client, SlavarrBot)
         bot: SlavarrBot = interaction.client
         await interaction.response.defer(thinking=True, ephemeral=True)
-        exists = False
-        if tvdb_id and tvdb_id in self.already_tvdb:
-            exists = True
-        if tmdb_id and tmdb_id in self.already_tmdb:
-            exists = True
-        if exists:
-            await interaction.followup.send(
-                "ℹ️ That series is already in Sonarr.", ephemeral=True
-            )
-            return
-        # try:
-        #     data = await bot.sonarr.add_series(tvdb_id, tmdb_id, monitored=bot.settings.sonarr_monitor if hasattr(bot.settings,'sonarr_monitor') else True)
-        #     title = data.get("title") or "Series"
-        #     await interaction.followup.send(f"✅ Added **{title}** to Sonarr.", ephemeral=True)
-        # except Exception as e:
-        #     log.exception("Failed to add series: %s", e)
-        #     await interaction.followup.send("❌ Failed to add the selected series (it might already exist or Sonarr refused).", ephemeral=True)
-        # Start quality selection flow (no root folder prompt)
-        view = QualityOnlySeriesView(tvdb_id, tmdb_id)
+        # Launch the Season + Quality wizard (works for new or existing series)
         profiles = await bot.sonarr.list_quality_profiles()
-        select = QualitySelect(
-            profiles, kind="series", payload={"tvdb_id": tvdb_id, "tmdb_id": tmdb_id}
-        )
-        view.clear_items()
-        view.add_item(select)
-        await interaction.followup.send(
-            "Pick a quality profile:", view=view, ephemeral=True
-        )
+        # Gather base season list from lookup (for new) and per-season file counts if it already exists
+        lookup = await bot.sonarr.series_lookup(tvdb_id, tmdb_id)
+        existing = await bot.sonarr.get_series_by_tvdb_or_tmdb(tvdb_id, tmdb_id)
+        existing_counts = await bot.sonarr.season_file_counts(existing["id"]) if existing else {}
+        seasons_source = (existing.get("seasons") if existing else (lookup.get("seasons") if lookup else [])) or []
+        view = SeriesAddWizardView(tvdb_id, tmdb_id, profiles, seasons_source, existing_counts, existing_id=(existing["id"] if existing else None))
+        await interaction.followup.send("Pick a quality profile and the seasons you want:", view=view, ephemeral=True)
 
 
 class ContentCommands(commands.Cog):

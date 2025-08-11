@@ -2,6 +2,7 @@ from typing import List, Dict, Any
 import httpx
 from datetime import datetime, timezone
 from operator import itemgetter
+from collections import defaultdict
 from pydantic import BaseModel
 
 
@@ -19,6 +20,21 @@ class SonarrClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self._client = httpx.AsyncClient(timeout=10.0)
+
+    async def series_lookup(self, tvdb_id: int | None, tmdb_id: int | None) -> dict | None:
+        """
+        Lookup a series via /series/lookup to get base metadata (incl. seasons list).
+        """
+        headers = {"X-Api-Key": self.api_key}
+        if tvdb_id:
+            term = f"tvdb:{tvdb_id}"
+        elif tmdb_id:
+            term = f"tmdb:{tmdb_id}"
+        else:
+            return None
+        r = await self._client.get(f"{self.base_url}/api/v3/series/lookup", headers=headers, params={"term": term})
+        r.raise_for_status()
+        return r.json()[0] if r.json() else None
 
     async def search_series(self, term: str) -> List[SeriesResult]:
         url = f"{self.base_url}/api/v3/series/lookup"
@@ -214,14 +230,7 @@ class SonarrClient:
         r.raise_for_status()
         return r.json()
 
-    async def add_series(
-        self,
-        tvdb_id: int | None,
-        tmdb_id: int | None,
-        quality_profile_id: int = 1,
-        root_folder_path: str = "/tv",
-        monitored: bool = True,
-    ) -> Dict[str, Any]:
+    async def add_series(self, tvdb_id: int | None, tmdb_id: int | None, quality_profile_id: int, root_folder_path: str, monitored: bool = True, seasons_override: list[dict] | None = None) -> Dict[str, Any]:
         # Sonarr requires full series body; we'll refetch the series by lookup first
         headers = {"X-Api-Key": self.api_key}
         # Prefer tvdbId
@@ -242,7 +251,7 @@ class SonarrClient:
             "qualityProfileId": quality_profile_id,
             "titleSlug": series.get("titleSlug"),
             "images": series.get("images", []),
-            "seasons": series.get("seasons", []),
+            "seasons": seasons_override if seasons_override is not None else series.get("seasons", []),
             "rootFolderPath": root_folder_path,
             "monitored": monitored,
             "addOptions": {"searchForMissingEpisodes": True},
@@ -256,6 +265,48 @@ class SonarrClient:
         )
         r.raise_for_status()
         return r.json()
+
+    def build_monitored_seasons(self, seasons_source: list[dict], selected_numbers: set[int]) -> list[dict]:
+        """
+        Build a Sonarr 'seasons' array where only selected seasons are monitored.
+        Keeps other season metadata (e.g., statistics) but flips monitored flag.
+        """
+        out: list[dict] = []
+        for s in seasons_source:
+            num = s.get("seasonNumber")
+            if num is None:
+                continue
+            item = {**s}
+            item["monitored"] = num in selected_numbers
+            out.append(item)
+        return out
+
+    async def season_file_counts(self, series_id: int) -> dict[int, dict]:
+        """
+        Return per-season counts: { seasonNumber: {total, have} } using episode list.
+        """
+        eps = await self.get_episode_list(series_id)
+        counts: dict[int, dict] = defaultdict(lambda: {"total": 0, "have": 0})
+        for e in eps:
+            sn = e.get("seasonNumber")
+            if sn is None:
+                continue
+            counts[sn]["total"] += 1
+            if e.get("hasFile"):
+                counts[sn]["have"] += 1
+        return counts
+
+    async def season_search(self, series_id: int, season_number: int) -> dict:
+        """
+        Trigger SeasonSearch for a specific season.
+        """
+        url = f"{self.base_url}/api/v3/command"
+        headers = {"X-Api-Key": self.api_key, "Content-Type": "application/json"}
+        payload = {"name": "SeasonSearch", "seriesId": series_id, "seasonNumber": season_number}
+        r = await self._client.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        return r.json()
+
 
     async def get_existing_by_ids(self, tvdb_id: int | None, tmdb_id: int | None):
         headers = {"X-Api-Key": self.api_key}
