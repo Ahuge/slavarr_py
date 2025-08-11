@@ -473,6 +473,347 @@ class ContentCommands(commands.Cog):
             embed.add_field(name="Transmission", value=t_line, inline=False)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+class SeriesAddWizardView(discord.ui.View):
+    """
+    Combined UI: choose quality profile + one or more seasons, then confirm.
+    If the series exists, we update monitored seasons and optionally profile;
+    if new, we add with only the selected seasons monitored.
+    """
+    def __init__(self, tvdb_id: int | None, tmdb_id: int | None, profiles: list[dict], seasons_source: list[dict], season_counts: dict[int, dict], existing_id: int | None, timeout: float | None = 180.0):
+        super().__init__(timeout=timeout)
+        self.tvdb_id = tvdb_id
+        self.tmdb_id = tmdb_id
+        self.profiles = profiles
+        self.seasons_source = seasons_source
+        self.season_counts = season_counts
+        self.existing_id = existing_id
+        self.selected_quality_id: int | None = None
+        self.selected_seasons: set[int] = set()
+        self.add_item(SeriesQualitySelect(profiles))
+        self.add_item(SeasonMultiSelect(seasons_source, season_counts))
+        self.add_item(ConfirmSeriesAddButton())
+
+class SeriesQualitySelect(discord.ui.Select):
+    def __init__(self, profiles: list[dict]):
+        options = [discord.SelectOption(label=p["name"][:100], value=f"{p['id']}|{p['name']}") for p in profiles[:25]]
+        super().__init__(placeholder="Choose a quality profile…", min_values=1, max_values=1, options=options)
+    async def callback(self, interaction: discord.Interaction):
+        view: SeriesAddWizardView = self.view  # type: ignore
+        qid_s, qlabel = self.values[0].split("|", 1)
+        view.selected_quality_id = int(qid_s)
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send(f"Quality set to **{qlabel}**. Now select seasons and hit **Add/Update**.", ephemeral=True)
+
+class SeasonMultiSelect(discord.ui.Select):
+    """
+    Multiselect of seasons; labels show how many episodes already have files.
+    """
+    def __init__(self, seasons_source: list[dict], season_counts: dict[int, dict]):
+        opts: list[discord.SelectOption] = []
+        for s in seasons_source:
+            num = s.get("seasonNumber")
+            if num is None:
+                continue
+            counts = season_counts.get(num, {"total": 0, "have": 0})
+            total, have = counts.get("total", 0), counts.get("have", 0)
+            status = "✅" if total and have >= total else ("➖" if have > 0 else "○")
+            label = f"Season {num}  {status}  ({have}/{total} eps)"
+            opts.append(discord.SelectOption(label=label[:100], value=str(num)))
+        placeholder = "Select one or more seasons…"
+        super().__init__(placeholder=placeholder, min_values=1 if opts else 0, max_values=min(25, len(opts) or 1), options=opts or [discord.SelectOption(label="No seasons", value="")])
+    async def callback(self, interaction: discord.Interaction):
+        view: SeriesAddWizardView = self.view  # type: ignore
+        view.selected_seasons = set(int(v) for v in self.values if v.isdigit())
+        await interaction.response.defer(ephemeral=True)
+        pretty = ", ".join(sorted([f"S{n}" for n in view.selected_seasons], key=lambda x: int(x[1:])))
+        await interaction.followup.send(f"Selected seasons: {pretty or '(none)'}", ephemeral=True)
+
+class ConfirmSeriesAddButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Add / Update Series", style=discord.ButtonStyle.success)
+    async def callback(self, interaction: discord.Interaction):
+        assert isinstance(interaction.client, SlavarrBot)
+        bot: SlavarrBot = interaction.client
+        view: SeriesAddWizardView = self.view  # type: ignore
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        if not view.selected_quality_id:
+            await interaction.followup.send("Please choose a quality profile first.", ephemeral=True)
+            return
+        # Build monitored seasons array
+        seasons_override = bot.sonarr.build_monitored_seasons(view.seasons_source, view.selected_seasons)
+        try:
+            if view.existing_id:
+                # Update existing: set quality + monitored flags, then search selected seasons
+                series = await bot.sonarr.get_series_by_id(view.existing_id)
+                if not series:
+                    await interaction.followup.send("Could not load existing series.", ephemeral=True)
+                    return
+                series["qualityProfileId"] = view.selected_quality_id
+                series["seasons"] = seasons_override
+                await bot.sonarr.update_series(series)
+                # Trigger searches for each selected season
+                for sn in view.selected_seasons:
+                    try:
+                        await bot.sonarr.season_search(view.existing_id, sn)
+                    except Exception:
+                        pass
+                await interaction.followup.send("✅ Series updated with selected seasons and profile.", ephemeral=True)
+            else:
+                # New add with selected seasons monitored only
+                data = await bot.sonarr.add_series(
+                    tvdb_id=view.tvdb_id,
+                    tmdb_id=view.tmdb_id,
+                    quality_profile_id=view.selected_quality_id,
+                    root_folder_path=bot.settings.sonarr_root_folder,
+                    monitored=True,
+                    seasons_override=seasons_override,
+                )
+                series_view = TrackSeriesView(series_id=data["id"])
+                msg = await interaction.followup.send(
+                    "✅ Series added with selected seasons monitored. Tracking started:",
+                    view=series_view,
+                    ephemeral=True
+                )
+                await series_view.start_auto_update(interaction, msg)
+        except Exception as e:
+            log.exception("Series add/update failed: %s", e)
+            await interaction.followup.send("❌ Failed to add/update the series. Please check Sonarr config.", ephemeral=True)
+
+
+# ===================== Request Tracking (Live Updates) =====================
+
+def _progress_bar(pct: float | None, width: int = 20) -> str:
+    if pct is None:
+        return "∙" * width
+    pct = max(0.0, min(100.0, pct))
+    filled = int(round((pct / 100.0) * width))
+    return "█" * filled + "░" * (width - filled)
+
+def _first_poster(item: dict) -> str | None:
+    """
+    Try to extract a poster URL from *arr entity images.
+    Prefer remoteUrl, fall back to url.
+    """
+    imgs = item.get("images") or []
+    for im in imgs:
+        if im.get("coverType") == "poster":
+            return im.get("remoteUrl") or im.get("url")
+    return None
+
+async def _render_movie_embed(bot: "SlavarrBot", movie_id: int) -> tuple[discord.Embed, bool]:
+    """Build a rich embed for a movie; returns (embed, done)."""
+    # library state
+    movie = await bot.radarr.get_movie_by_id(movie_id)
+    if not movie:
+        emb = discord.Embed(title="Movie", description="⚠️ Movie not found in Radarr.", color=0xe74c3c)
+        return emb, True
+    title = f"{movie.get('title')} ({movie.get('year')})"
+    downloaded = bool(movie.get("movieFile"))
+    # queue state
+    q = bot.radarr.summarize_queue_progress(await bot.radarr.get_queue(), movie_id)
+    pct = None
+    eta = None
+    if q and q.get("size"):
+        try:
+            pct = 100 * (1 - (q.get("sizeleft",0)/q.get("size",1)))
+        except Exception:
+            pct = None
+        eta = q.get("timeleft")
+    t_details = None
+    if q and bot.transmission and q.get("downloadId"):
+        try:
+            t = await bot.transmission.get_by_hash(q["downloadId"])
+            if t:
+                t_pct = (t.get("percentDone",0.0)*100.0)
+                t_rate = t.get("rateDownload",0)
+                t_eta = t.get("eta","?")
+                t_details = f"{bot.transmission.human_status(t)} • {t_pct:.1f}% • {t_rate} B/s • eta {t_eta}"
+        except Exception:
+            pass
+    color = 0x2ecc71 if downloaded else (0xf39c12 if q else 0x95a5a6)
+    emb = discord.Embed(title=title, color=color)
+    poster = _first_poster(movie)
+    if poster:
+        emb.set_thumbnail(url=poster)
+    if downloaded:
+        emb.add_field(name="State", value="✅ Downloaded", inline=False)
+        return emb, True
+    if q:
+        bar = _progress_bar(pct)
+        eta_txt = f" • ETA {eta}" if eta else ""
+        emb.add_field(name="State", value="⬇️ Downloading", inline=True)
+        emb.add_field(name="Progress", value=f"`{bar}` {pct:.1f if pct is not None else 0:.1f}％{eta_txt}", inline=False)
+        if t_details:
+            emb.add_field(name="Transmission", value=t_details, inline=False)
+        return emb, False
+    emb.add_field(name="State", value="🕘 Queued / Waiting for a matching release", inline=False)
+    return emb, False
+
+
+async def _render_series_embed(bot: "SlavarrBot", series_id: int) -> tuple[discord.Embed, bool]:
+    """Series-wide progress embed; done when nearly complete or no queue."""
+    series = await bot.sonarr.get_series_by_id(series_id) if bot.sonarr else None
+    if not series:
+        return "⚠️ Series not found in Sonarr.", True
+        emb = discord.Embed(title="Series", description="⚠️ Series not found in Sonarr.", color=0xe74c3c)
+        return emb, True
+    stats = bot.sonarr.summarize_series_progress(series)
+    have = stats.get("episodeFileCount",0)
+    total = stats.get("totalEpisodeCount",0)
+    pct = stats.get("percentOfEpisodes") or (100.0 * have / total if total else 0.0)
+    q_items = await bot.sonarr.get_queue()
+    active = bot.sonarr.summarize_queue_for_series(q_items, series_id)
+    title = series.get("title")
+    bar = _progress_bar(pct)
+    color = 0x2ecc71 if pct >= 99.9 else (0xf39c12 if active else 0x95a5a6)
+    emb = discord.Embed(title=title, color=color)
+    poster = _first_poster(series)
+    if poster:
+        emb.set_thumbnail(url=poster)
+    emb.add_field(name="Progress", value=f"`{bar}` {pct:.1f}%  ({have}/{total} eps)", inline=False)
+    if active:
+        # try to enrich first item with Transmission
+        t_details = None
+        if bot.transmission:
+            for qi in active:
+                if qi.get("downloadId"):
+                    try:
+                        t = await bot.transmission.get_by_hash(qi["downloadId"])
+                        if t:
+                            t_pct = (t.get("percentDone",0.0)*100.0)
+                            t_rate = t.get("rateDownload",0)
+                            t_eta = t.get("eta","?")
+                            t_details = f"{bot.transmission.human_status(t)} • {t_pct:.1f}% • {t_rate} B/s • eta {t_eta}"
+                            break
+                    except Exception:
+                        pass
+        emb.add_field(name="State", value="⬇️ Downloading", inline=True)
+        if t_details:
+            emb.add_field(name="Transmission", value=t_details, inline=False)
+        return emb, False
+    # done when ~complete or nothing actively downloading; Sonarr may still index new eps later
+    done = pct >= 99.9
+    emb.add_field(name="State", value=("✅ Complete" if done else "🕘 Waiting / Idle"), inline=True)
+    return emb, done
+
+class TrackMovieView(discord.ui.View):
+    def __init__(self, movie_id: int, timeout: float | None = 300.0):
+        super().__init__(timeout=timeout)
+        self.movie_id = movie_id
+        self._task: asyncio.Task | None = None
+        self._stopped = False
+        self._message_id: int | None = None
+        self.add_item(RefreshMovieButton())
+        self.add_item(StopTrackingButton())
+
+    async def on_timeout(self) -> None:
+        try:
+            # When view times out, do nothing (components will disable automatically in Discord)
+            pass
+        except Exception:
+            pass
+
+    async def start_auto_update(self, interaction: discord.Interaction, message: discord.Message,
+                                interval_sec: int = 10, max_iters: int = 30):
+        """Kick off a background loop editing the same ephemeral message."""
+        self._message_id = message.id
+        if self._task and not self._task.done():
+            return
+
+        async def _loop():
+            it = 0
+            while it < max_iters and not self._stopped:
+                emb, done = await _render_movie_embed(interaction.client, self.movie_id)  # type: ignore
+                try:
+                    await interaction.followup.edit_message(self._message_id, embed=emb, view=self)
+                except Exception:
+                    # swallow edit errors (ephemeral lifecycle etc.)
+                    return
+                if done:
+                    return
+                it += 1
+                await asyncio.sleep(interval_sec)
+
+        self._task = asyncio.create_task(_loop())
+
+class RefreshMovieButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Refresh now", style=discord.ButtonStyle.primary)
+    async def callback(self, interaction: discord.Interaction):
+        bot: SlavarrBot = interaction.client  # type: ignore
+        view: TrackMovieView = self.view  # type: ignore
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        emb, done = await _render_movie_embed(bot, view.movie_id)
+        if view._message_id:
+            try:
+                await interaction.followup.edit_message(view._message_id, embed=emb, view=view)
+            except Exception:
+                pass
+        else:
+            await interaction.followup.send(embed=emb, ephemeral=True)
+
+class StopTrackingButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Stop tracking", style=discord.ButtonStyle.danger)
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        # Disable the view components
+        v: discord.ui.View = self.view  # type: ignore
+        # signal loop to stop
+        if hasattr(v, "_stopped"):
+            v._stopped = True  # type: ignore
+        for item in v.children:
+            item.disabled = True
+        await interaction.edit_original_response(view=v)
+        await interaction.followup.send("🛑 Tracking stopped.", ephemeral=True)
+
+class TrackSeriesView(discord.ui.View):
+    def __init__(self, series_id: int, timeout: float | None = 300.0):
+        super().__init__(timeout=timeout)
+        self.series_id = series_id
+        self._task: asyncio.Task | None = None
+        self._stopped = False
+        self._message_id: int | None = None
+        self.add_item(RefreshSeriesButton())
+        self.add_item(StopTrackingButton())
+
+    async def start_auto_update(self, interaction: discord.Interaction, message: discord.Message,
+                                interval_sec: int = 10, max_iters: int = 30):
+        self._message_id = message.id
+        if self._task and not self._task.done():
+            return
+
+        async def _loop():
+            it = 0
+            while it < max_iters and not self._stopped:
+                emb, done = await _render_series_embed(interaction.client, self.series_id)  # type: ignore
+                try:
+                    await interaction.followup.edit_message(self._message_id, embed=emb, view=self)
+                except Exception:
+                    return
+                if done:
+                    return
+                it += 1
+                await asyncio.sleep(interval_sec)
+
+        self._task = asyncio.create_task(_loop())
+
+class RefreshSeriesButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Refresh now", style=discord.ButtonStyle.primary)
+    async def callback(self, interaction: discord.Interaction):
+        bot: SlavarrBot = interaction.client  # type: ignore
+        view: TrackSeriesView = self.view  # type: ignore
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        emb, done = await _render_series_embed(bot, view.series_id)
+        if view._message_id:
+            try:
+                await interaction.followup.edit_message(view._message_id, embed=emb, view=view)
+            except Exception:
+                pass
+        else:
+            await interaction.followup.send(embed=emb, ephemeral=True)
+
 
 async def create_bot(settings: Settings) -> SlavarrBot:
     global bot
@@ -522,10 +863,15 @@ class QualitySelect(discord.ui.Select):
                     monitored=bot.settings.radarr_monitor,
                 )
                 title = data.get("title") or "Movie"
-                # After successful add, validate releases for expected quality
-                await maybe_offer_release_picker_for_movie(
-                    interaction, data["id"], expected_quality_label=qlabel
+                # After successful add, offer tracking (with background updates) + validate releases
+                movie_view = TrackMovieView(movie_id=data["id"])
+                msg = await interaction.followup.send(
+                    content="🎬 Request added. Tracking started:",
+                    view=movie_view,
+                    ephemeral=True
                 )
+                await movie_view.start_auto_update(interaction, msg)
+                await maybe_offer_release_picker_for_movie(interaction, data["id"], expected_quality_label=qlabel)
             else:
                 tvdb_id = self.payload.get("tvdb_id")
                 tmdb_id = self.payload.get("tmdb_id")
@@ -546,11 +892,19 @@ class QualitySelect(discord.ui.Select):
                     ep = bot.sonarr.pick_missing_aired_monitored_episode(eps)
                 except Exception:
                     ep = None
+                # Offer tracking (series-wide) with background updates, then fallback picker if needed
+                series_view = TrackSeriesView(series_id=data["id"])
+                msg = await interaction.followup.send(
+                    content="📺 Series added. Tracking started:",
+                    view=series_view,
+                    ephemeral=True
+                )
+                await series_view.start_auto_update(interaction, msg)
                 await maybe_offer_release_picker_for_series(
                     interaction,
                     series_id=data["id"],
                     episode=ep,
-                    expected_quality_label=qlabel,
+                    expected_quality_label=qlabel
                 )
         except Exception as e:
             log.exception("Add failed: %s", e)
