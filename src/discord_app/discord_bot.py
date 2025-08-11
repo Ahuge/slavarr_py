@@ -385,14 +385,16 @@ class QualityOnlySeriesView(discord.ui.View):
 class QualitySelect(discord.ui.Select):
     def __init__(self, profiles: list[dict], kind: str, payload: dict):
         self.kind = kind
-        self.payload = payload  # carries tmdb_id or tvdb/tmdb ids
-        options = [discord.SelectOption(label=p["name"][:100], value=str(p["id"])) for p in profiles[:25]]
+        self.payload = payload  # carries tmdb_id or tvdb/tmdb ids; we also include selected profile label to detect expectations
+        options = [discord.SelectOption(label=p["name"][:100], value=f"{p['id']}|{p['name']}") for p in profiles[:25]]
         super().__init__(placeholder="Choose a quality profile…", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         assert isinstance(interaction.client, SlavarrBot)
         bot: SlavarrBot = interaction.client
-        qid = int(self.values[0])
+        raw = self.values[0]
+        qid_s, qlabel = raw.split("|", 1)
+        qid = int(qid_s)
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
             if self.kind == "movie":
@@ -404,7 +406,8 @@ class QualitySelect(discord.ui.Select):
                     monitored=bot.settings.radarr_monitor,
                 )
                 title = data.get("title") or "Movie"
-                await interaction.followup.send(f"✅ Added **{title}** (tmdb:{tmdb_id}) to Radarr.", ephemeral=True)
+                # After successful add, validate releases for expected quality
+                await maybe_offer_release_picker_for_movie(interaction, data["id"], expected_quality_label=qlabel)
             else:
                 tvdb_id = self.payload.get("tvdb_id")
                 tmdb_id = self.payload.get("tmdb_id")
@@ -416,7 +419,124 @@ class QualitySelect(discord.ui.Select):
                     monitored=bot.settings.sonarr_monitor if hasattr(bot.settings,'sonarr_monitor') else True,
                 )
                 title = data.get("title") or "Series"
-                await interaction.followup.send(f"✅ Added **{title}** to Sonarr.", ephemeral=True)
+                # Pick a representative missing aired monitored episode
+                ep = None
+                try:
+                    eps = await bot.sonarr.get_episode_list(data["id"])
+                    ep = bot.sonarr.pick_missing_aired_monitored_episode(eps)
+                except Exception:
+                    ep = None
+                await maybe_offer_release_picker_for_series(interaction, series_id=data["id"], episode=ep, expected_quality_label=qlabel)
         except Exception as e:
             log.exception("Add failed: %s", e)
             await interaction.followup.send("❌ Add failed (check quality profile or *arr config).", ephemeral=True)
+
+# ============== Release fallback helpers & views ==============
+
+async def maybe_offer_release_picker_for_movie(interaction: discord.Interaction, movie_id: int, expected_quality_label: str):
+    """
+    After a movie add, check releases cache. If none match expected quality, present a picker.
+    """
+    assert isinstance(interaction.client, SlavarrBot)
+    bot: SlavarrBot = interaction.client
+    try:
+        releases = await bot.radarr.get_releases(movie_id)
+    except Exception:
+        releases = []
+    matches = [r for r in releases if str(r.get("quality",{}).get("quality",{}).get("name","")).lower() == expected_quality_label.lower()]
+    if matches:
+        # success path
+        await interaction.followup.send("✅ Added and releases match your profile.", ephemeral=True)
+        return
+    # Offer picker of available releases
+    top = releases[:25]
+    if not top:
+        # trigger search to refresh
+        try:
+            await bot.radarr.trigger_movie_search(movie_id)
+            await interaction.followup.send(f"ℹ️ No cached releases matched **{expected_quality_label}**. Triggered a fresh Radarr search; try again in a moment.", ephemeral=True)
+        except Exception:
+            await interaction.followup.send(f"ℹ️ No cached releases matched **{expected_quality_label}** and search could not be triggered.", ephemeral=True)
+        return
+    view = discord.ui.View(timeout=120)
+    view.add_item(ReleaseSelect(kind="movie", options=top, payload={"movie_id": movie_id}))
+    await interaction.followup.send(f"⚠️ No **{expected_quality_label}** releases found right now. Pick an available release to grab:", view=view, ephemeral=True)
+
+async def maybe_offer_release_picker_for_series(interaction: discord.Interaction, series_id: int, episode: dict | None, expected_quality_label: str):
+    """
+    After a series add, check a representative episode's releases.
+    """
+    assert isinstance(interaction.client, SlavarrBot)
+    bot: SlavarrBot = interaction.client
+    if not episode:
+        await interaction.followup.send("✅ Series added. (No missing aired episodes to validate releases.)", ephemeral=True)
+        return
+    try:
+        releases = await bot.sonarr.get_releases_for_episode(episode["id"])
+    except Exception:
+        releases = []
+    matches = [r for r in releases if str(r.get("quality",{}).get("quality",{}).get("name","")).lower() == expected_quality_label.lower()]
+    if matches:
+        await interaction.followup.send("✅ Series added and releases match your profile.", ephemeral=True)
+        return
+    top = releases[:25]
+    if not top:
+        try:
+            await bot.sonarr.trigger_series_search(series_id)
+            await interaction.followup.send(f"ℹ️ No cached releases matched **{expected_quality_label}**. Triggered a fresh Sonarr search; try again in a moment.", ephemeral=True)
+        except Exception:
+            await interaction.followup.send(f"ℹ️ No cached releases matched **{expected_quality_label}** and search could not be triggered.", ephemeral=True)
+        return
+    view = discord.ui.View(timeout=120)
+    # carry both series and episode ids, Sonarr grabs by guid/indexerId independent of episode param
+    view.add_item(ReleaseSelect(kind="series", options=top, payload={"series_id": series_id, "episode_id": episode["id"]}))
+    await interaction.followup.send(f"⚠️ No **{expected_quality_label}** releases found right now. Pick an available release to grab:", view=view, ephemeral=True)
+
+class ReleaseSelect(discord.ui.Select):
+    """
+    Presents available releases. On selection, we POST /release with guid + indexerId.
+    """
+    def __init__(self, kind: str, options: list[dict], payload: dict):
+        self.kind = kind  # "movie" | "series"
+        self.payload = payload
+        select_opts: list[discord.SelectOption] = []
+        for r in options[:25]:
+            qname = r.get("quality",{}).get("quality",{}).get("name","?")
+            indexer = r.get("indexer","?")
+            size = r.get("size","")
+            size_gb = f"{(size/1_000_000_000):.1f} GB" if isinstance(size,(int,float)) and size>0 else ""
+            age = r.get("age","")
+            label = f"{qname} • {indexer} • {size_gb}"
+            # value encodes guid|indexerId
+            val = f"{r.get('guid','')}|{r.get('indexerId',0)}"
+            if val.split("|")[0]:
+                select_opts.append(discord.SelectOption(label=label[:100], value=val))
+        placeholder = "Choose a release to grab…"
+        super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=select_opts or [discord.SelectOption(label="No releases available", value="")])
+
+    async def callback(self, interaction: discord.Interaction):
+        assert isinstance(interaction.client, SlavarrBot)
+        bot: SlavarrBot = interaction.client
+        if not self.values or not self.values[0]:
+            await interaction.response.send_message("No releases to choose from.", ephemeral=True)
+            return
+        guid, idx = self.values[0].split("|", 1)
+        indexer_id = int(idx)
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            if self.kind == "movie":
+                await bot.radarr.post_release(guid, indexer_id)
+            else:
+                await bot.sonarr.post_release(guid, indexer_id)
+            await interaction.followup.send("✅ Grabbed the selected release.", ephemeral=True)
+        except Exception as e:
+            log.exception("Grab failed: %s", e)
+            # try to trigger a search and inform user
+            try:
+                if self.kind == "movie":
+                    await bot.radarr.trigger_movie_search(self.payload.get("movie_id"))
+                else:
+                    await bot.sonarr.trigger_series_search(self.payload.get("series_id"))
+                await interaction.followup.send("⚠️ Couldn’t grab from cache (maybe expired). Triggered a fresh search—try again shortly.", ephemeral=True)
+            except Exception:
+                await interaction.followup.send("❌ Couldn’t grab and couldn’t trigger a search. Please try again later.", ephemeral=True)

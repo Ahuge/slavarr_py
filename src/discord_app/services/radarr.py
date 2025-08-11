@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 import httpx
+from datetime import datetime, timezone
 from pydantic import BaseModel
 
 class MovieResult(BaseModel):
@@ -85,6 +86,49 @@ class RadarrClient:
                     "trackedDownloadStatus": it.get("trackedDownloadStatus"),
                 }
         return None
+
+    async def get_movie_by_id(self, movie_id: int) -> dict | None:
+        url = f"{self.base_url}/api/v3/movie/{movie_id}"
+        headers = {"X-Api-Key": self.api_key}
+        r = await self._client.get(url, headers=headers)
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        return r.json()
+
+    async def get_releases(self, movie_id: int) -> list[dict]:
+        """
+        Get cached indexer releases for a specific movie.
+        """
+        url = f"{self.base_url}/api/v3/release"
+        headers = {"X-Api-Key": self.api_key}
+        r = await self._client.get(url, headers=headers, params={"movieId": movie_id})
+        r.raise_for_status()
+        data = r.json()
+        # Radarr returns a list
+        return data if isinstance(data, list) else []
+
+    async def post_release(self, guid: str, indexer_id: int) -> dict:
+        """
+        Grab a specific release from cache.
+        """
+        url = f"{self.base_url}/api/v3/release"
+        headers = {"X-Api-Key": self.api_key, "Content-Type": "application/json"}
+        payload = {"guid": guid, "indexerId": indexer_id}
+        r = await self._client.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        return r.json()
+
+    async def trigger_movie_search(self, movie_id: int) -> dict:
+        """
+        If the cached releases are stale, trigger a search.
+        """
+        url = f"{self.base_url}/api/v3/command"
+        headers = {"X-Api-Key": self.api_key, "Content-Type": "application/json"}
+        payload = {"name": "MoviesSearch", "movieIds": [movie_id]}
+        r = await self._client.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        return r.json()
 
     async def get_existing_by_tmdb(self, tmdb_id: int):
         url = f"{self.base_url}/api/v3/movie"
