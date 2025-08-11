@@ -1,6 +1,7 @@
 import logging
 import sys
 
+
 def setup_logging():
     handler = logging.StreamHandler(sys.stdout)
     fmt = logging.Formatter(

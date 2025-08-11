@@ -2,8 +2,15 @@ from typing import Optional, List
 import httpx
 import xml.etree.ElementTree as ET
 
+
 class PlexClient:
-    def __init__(self, base_url: str, token: str, movies_section_id: Optional[int] = None, shows_section_id: Optional[int] = None):
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        movies_section_id: Optional[int] = None,
+        shows_section_id: Optional[int] = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.movies_section_id = movies_section_id
@@ -22,7 +29,9 @@ class PlexClient:
         else:
             url = f"{self.base_url}/search"
             params = {**params, "query": query}
-        r = await self._client.get(url, params=params, headers={"Accept":"application/xml"})
+        r = await self._client.get(
+            url, params=params, headers={"Accept": "application/xml"}
+        )
         r.raise_for_status()
         return self._parse_metadata_list(r.text)
 
@@ -61,7 +70,14 @@ class PlexClient:
             out.append(item)
         return out
 
-    async def movie_exists(self, *, tmdb_id: Optional[int] = None, imdb_id: Optional[str] = None, title: Optional[str] = None, year: Optional[int] = None) -> bool:
+    async def movie_exists(
+        self,
+        *,
+        tmdb_id: Optional[int] = None,
+        imdb_id: Optional[str] = None,
+        title: Optional[str] = None,
+        year: Optional[int] = None,
+    ) -> bool:
         # Strategy:
         # 1) If tmdb/imdb provided, search by title (fast) and match GUIDs: tmdb://<id>, imdb://<ttid>
         # 2) If only title/year, do a fuzzy match on title + year.
@@ -74,7 +90,11 @@ class PlexClient:
             return False
         items = await self.search_movies(q)
         tmdb_sig = f"tmdb://{tmdb_id}" if tmdb_id else None
-        imdb_sig = imdb_id.replace("tt", "imdb://tt") if imdb_id and not imdb_id.startswith("imdb://") else imdb_id
+        imdb_sig = (
+            imdb_id.replace("tt", "imdb://tt")
+            if imdb_id and not imdb_id.startswith("imdb://")
+            else imdb_id
+        )
         for it in items:
             guids = it.get("guids", [])
             if tmdb_sig and any(g.lower() == tmdb_sig for g in guids):
@@ -89,8 +109,9 @@ class PlexClient:
     async def close(self):
         await self._client.aclose()
 
-
-    async def search_series(self, query: str, series_section_id: Optional[int] = None) -> List[dict]:
+    async def search_series(
+        self, query: str, series_section_id: Optional[int] = None
+    ) -> List[dict]:
         params = self._auth_params()
         section_id = series_section_id or self.movies_section_id  # allow override
         # For shows, type=2
@@ -100,11 +121,21 @@ class PlexClient:
         else:
             url = f"{self.base_url}/search"
             params = {**params, "query": query}
-        r = await self._client.get(url, params=params, headers={"Accept":"application/xml"})
+        r = await self._client.get(
+            url, params=params, headers={"Accept": "application/xml"}
+        )
         r.raise_for_status()
         return self._parse_metadata_list(r.text)
 
-    async def series_exists(self, *, tvdb_id: Optional[int] = None, tmdb_id: Optional[int] = None, title: Optional[str] = None, year: Optional[int] = None, series_section_id: Optional[int] = None) -> bool:
+    async def series_exists(
+        self,
+        *,
+        tvdb_id: Optional[int] = None,
+        tmdb_id: Optional[int] = None,
+        title: Optional[str] = None,
+        year: Optional[int] = None,
+        series_section_id: Optional[int] = None,
+    ) -> bool:
         q = title or ""
         if not q and tmdb_id:
             q = str(tmdb_id)
@@ -126,7 +157,6 @@ class PlexClient:
                     return True
         return False
 
-
     async def search_series2(self, query: str) -> list[dict]:
         params = self._auth_params()
         if self.shows_section_id:
@@ -135,11 +165,20 @@ class PlexClient:
         else:
             url = f"{self.base_url}/search"
             params = {**params, "query": query}
-        r = await self._client.get(url, params=params, headers={"Accept":"application/xml"})
+        r = await self._client.get(
+            url, params=params, headers={"Accept": "application/xml"}
+        )
         r.raise_for_status()
         return self._parse_metadata_list(r.text)
 
-    async def series_exists2(self, *, tvdb_id: int | None = None, tmdb_id: int | None = None, title: str | None = None, year: int | None = None) -> bool:
+    async def series_exists2(
+        self,
+        *,
+        tvdb_id: int | None = None,
+        tmdb_id: int | None = None,
+        title: str | None = None,
+        year: int | None = None,
+    ) -> bool:
         q = title or ""
         if not q and tmdb_id:
             q = str(tmdb_id)

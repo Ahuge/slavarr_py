@@ -4,9 +4,11 @@ import logging
 app = FastAPI()
 log = logging.getLogger(__name__)
 
+
 @app.get("/healthz")
 async def healthz():
     return {"ok": True}
+
 
 @app.post("/")
 async def receive_webhook(req: Request):

@@ -3,6 +3,7 @@ import httpx
 from datetime import datetime, timezone
 from pydantic import BaseModel
 
+
 class MovieResult(BaseModel):
     title: str
     year: int | None = None
@@ -11,9 +12,10 @@ class MovieResult(BaseModel):
     overview: str | None = None
     titleSlug: str | None = None
 
+
 class RadarrClient:
     def __init__(self, base_url: str, api_key: str):
-        self.base_url = base_url.rstrip('/')
+        self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self._client = httpx.AsyncClient(timeout=10.0)
 
@@ -26,14 +28,16 @@ class RadarrClient:
         items = r.json()
         results = []
         for it in items[:50]:
-            results.append(MovieResult(
-                title=it.get("title"),
-                year=it.get("year"),
-                tmdbId=it.get("tmdbId"),
-                imdbId=it.get("imdbId"),
-                overview=it.get("overview"),
-                titleSlug=it.get("titleSlug"),
-            ))
+            results.append(
+                MovieResult(
+                    title=it.get("title"),
+                    year=it.get("year"),
+                    tmdbId=it.get("tmdbId"),
+                    imdbId=it.get("imdbId"),
+                    overview=it.get("overview"),
+                    titleSlug=it.get("titleSlug"),
+                )
+            )
         return results
 
     async def list_quality_profiles(self) -> list[dict]:
@@ -61,7 +65,9 @@ class RadarrClient:
         data = r.json()
         return data.get("records", data) if isinstance(data, dict) else data
 
-    async def get_history_for_movie(self, movie_id: int, page_size: int = 10) -> list[dict]:
+    async def get_history_for_movie(
+        self, movie_id: int, page_size: int = 10
+    ) -> list[dict]:
         """Recent history for a given movie id."""
         url = f"{self.base_url}/api/v3/history/movie"
         headers = {"X-Api-Key": self.api_key}
@@ -140,7 +146,13 @@ class RadarrClient:
             return items[0]
         return None
 
-    async def add_movie(self, tmdb_id: int, quality_profile_id: int = 1, root_folder_path: str = "/movies", monitored: bool = True) -> Dict[str, Any]:
+    async def add_movie(
+        self,
+        tmdb_id: int,
+        quality_profile_id: int = 1,
+        root_folder_path: str = "/movies",
+        monitored: bool = True,
+    ) -> Dict[str, Any]:
         url = f"{self.base_url}/api/v3/movie"
         headers = {"X-Api-Key": self.api_key, "Content-Type": "application/json"}
         payload = {
