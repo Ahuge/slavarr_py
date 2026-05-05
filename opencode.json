@@ -1,0 +1,4 @@
+{
+  "model": "opencode/minimax-m2.5",
+  "instructions": ["AGENTS.md"]
+}

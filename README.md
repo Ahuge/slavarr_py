@@ -25,7 +25,7 @@ This is a starter scaffold for a Discord bot that integrates with Radarr/Sonarr 
 
 3. Run:
    ```bash
-   python -m src.app.main
+   python -m src.discord_app.main
    ```
 
 4. In Discord Developer Portal, add the bot to your server (the invite URL is logged at startup).
