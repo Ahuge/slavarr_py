@@ -387,9 +387,10 @@ class ContentCommands(commands.Cog):
         embed.add_field(name="State", value=state, inline=False)
         if q:
             pct = None
-            if q.get("size"):
+            size = q.get("size") or 0
+            if size > 0:
                 try:
-                    pct = 100 * (1 - (q.get("sizeleft", 0) / q.get("size", 1)))
+                    pct = 100 * (1 - (q.get("sizeleft", 0) / size))
                 except Exception:
                     pct = None
             qline = f"{q.get('status','queue')}"
@@ -456,11 +457,10 @@ class ContentCommands(commands.Cog):
         if q_for_series:
             first = q_for_series[0]
             pct_q = None
-            if first.get("size"):
+            size = first.get("size") or 0
+            if size > 0:
                 try:
-                    pct_q = 100 * (
-                        1 - (first.get("sizeleft", 0) / first.get("size", 1))
-                    )
+                    pct_q = 100 * (1 - (first.get("sizeleft", 0) / size))
                 except Exception:
                     pct_q = None
             qline = f"{first.get('status','queue')}"
@@ -613,11 +613,13 @@ async def _render_movie_embed(bot: "SlavarrBot", movie_id: int) -> tuple[discord
     q = bot.radarr.summarize_queue_progress(await bot.radarr.get_queue(), movie_id)
     pct = None
     eta = None
-    if q and q.get("size"):
-        try:
-            pct = 100 * (1 - (q.get("sizeleft",0)/q.get("size",1)))
-        except Exception:
-            pct = None
+    if q:
+        size = q.get("size") or 0
+        if size > 0:
+            try:
+                pct = 100 * (1 - (q.get("sizeleft", 0) / size))
+            except Exception:
+                pct = None
         eta = q.get("timeleft")
     t_details = None
     if q and bot.transmission and q.get("downloadId"):

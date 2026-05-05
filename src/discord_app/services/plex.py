@@ -157,45 +157,5 @@ class PlexClient:
                     return True
         return False
 
-    async def search_series2(self, query: str) -> list[dict]:
-        params = self._auth_params()
-        if self.shows_section_id:
-            url = f"{self.base_url}/library/sections/{self.shows_section_id}/all"
-            params = {**params, "type": "2", "query": query}
-        else:
-            url = f"{self.base_url}/search"
-            params = {**params, "query": query}
-        r = await self._client.get(
-            url, params=params, headers={"Accept": "application/xml"}
-        )
-        r.raise_for_status()
-        return self._parse_metadata_list(r.text)
-
-    async def series_exists2(
-        self,
-        *,
-        tvdb_id: int | None = None,
-        tmdb_id: int | None = None,
-        title: str | None = None,
-        year: int | None = None,
-    ) -> bool:
-        q = title or ""
-        if not q and tmdb_id:
-            q = str(tmdb_id)
-        if not q and tvdb_id:
-            q = str(tvdb_id)
-        if not q:
-            return False
-        items = await self.search_series(q)
-        tvdb_sig = f"tvdb://{tvdb_id}" if tvdb_id else None
-        tmdb_sig = f"tmdb://{tmdb_id}" if tmdb_id else None
-        for it in items:
-            guids = it.get("guids", [])
-            if tvdb_sig and any(g.lower() == tvdb_sig for g in guids):
-                return True
-            if tmdb_sig and any(g.lower() == tmdb_sig for g in guids):
-                return True
-            if title and it.get("title") and it["title"].lower() == title.lower():
-                if year and it.get("year") and year == it["year"]:
-                    return True
-        return False
+    async def close(self):
+        await self._client.aclose()

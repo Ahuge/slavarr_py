@@ -4,7 +4,6 @@ from sqlalchemy.orm import (
     Mapped,
     mapped_column,
     sessionmaker,
-    relationship,
 )
 from sqlalchemy.pool import StaticPool
 

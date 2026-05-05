@@ -1,7 +1,6 @@
 from typing import List, Dict, Any
 import httpx
 from datetime import datetime, timezone
-from operator import itemgetter
 from collections import defaultdict
 from pydantic import BaseModel
 
