@@ -1,7 +1,6 @@
 services:
   slavarr:
-    image: ghcr.io/ahuge/slavarr_py:latest
-    pull_policy: always
+    image: ghcr.io/ahuge/slavarr_py:549c0c05cf0ae9cd547012dc661512d027ec0a3e
     env_file:
       - /share/CACHEDEV1_DATA/PlexRoot/ContainerConfig/slavarr/.env
     network_mode: host
