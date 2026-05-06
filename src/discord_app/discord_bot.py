@@ -647,7 +647,8 @@ async def _render_movie_embed(bot: "SlavarrBot", movie_id: int) -> tuple[discord
         bar = _progress_bar(pct)
         eta_txt = f" • ETA {eta}" if eta else ""
         emb.add_field(name="State", value="⬇️ Downloading", inline=True)
-        emb.add_field(name="Progress", value=f"`{bar}` {pct:.1f if pct is not None else 0:.1f}％{eta_txt}", inline=False)
+        pct_str = f"{pct:.1f}" if pct is not None else "0.0"
+        emb.add_field(name="Progress", value=f"`{bar}` {pct_str}%{eta_txt}", inline=False)
         if t_details:
             emb.add_field(name="Transmission", value=t_details, inline=False)
         return emb, False
