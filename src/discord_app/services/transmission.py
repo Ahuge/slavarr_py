@@ -8,7 +8,7 @@ class TransmissionClient:
         self.password = password
         self._sid = None
         self._client = httpx.AsyncClient(
-            timeout=10.0, auth=(user, password) if user and password else None
+            timeout=30.0, auth=(user, password) if user and password else None
         )
 
     async def _rpc(self, method: str, arguments: dict | None = None):

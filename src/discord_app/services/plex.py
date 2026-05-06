@@ -15,7 +15,7 @@ class PlexClient:
         self.token = token
         self.movies_section_id = movies_section_id
         self.shows_section_id = shows_section_id
-        self._client = httpx.AsyncClient(timeout=10.0)
+        self._client = httpx.AsyncClient(timeout=30.0)
 
     def _auth_params(self):
         return {"X-Plex-Token": self.token}

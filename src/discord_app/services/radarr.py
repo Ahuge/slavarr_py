@@ -20,7 +20,7 @@ class RadarrClient:
     def __init__(self, base_url: str, api_key: str):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
-        self._client = httpx.AsyncClient(timeout=10.0)
+        self._client = httpx.AsyncClient(timeout=30.0)
         log.info(f"RadarrClient initialized: base_url={self.base_url}")
 
     async def search_movies(self, term: str) -> List[MovieResult]:
