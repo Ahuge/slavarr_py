@@ -1,8 +1,9 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException, Header
 import logging
 from typing import Optional
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 log = logging.getLogger(__name__)
 
 # Valid API keys - loaded from environment in production
@@ -16,11 +17,12 @@ def set_api_keys(radarr_key: str, sonarr_key: str):
         VALID_API_KEYS.add(sonarr_key)
 
 
-@app.on_event("startup")
-async def load_api_keys():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     from discord_app.config import load_settings
     settings = load_settings()
     set_api_keys(settings.radarr_api_key, settings.sonarr_api_key)
+    yield
 
 
 def verify_api_key(x_api_key: Optional[str]) -> bool:
