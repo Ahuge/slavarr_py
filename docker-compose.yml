@@ -6,5 +6,6 @@ services:
       - /share/CACHEDEV1_DATA/PlexRoot/ContainerConfig/slavarr/.env
     ports:
       - "3001:3001"
+    network_mode: host
     volumes:
       - /share/CACHEDEV1_DATA/PlexRoot/ContainerConfig/slavarr/data:/app/data
