@@ -14,9 +14,10 @@ class Base(DeclarativeBase):
 
 class User(Base):
     __tablename__ = "users"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # Discord user id
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
     auto_subscribe: Mapped[bool] = mapped_column(Boolean, default=True)
     dm_instead: Mapped[bool] = mapped_column(Boolean, default=False)
+    discord_channel_id: Mapped[int] = mapped_column(Integer, nullable=True)
 
 
 class UserEvent(Base):

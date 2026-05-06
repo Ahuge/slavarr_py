@@ -123,13 +123,6 @@ class MovieSelectView(discord.ui.View):
                 "ℹ️ That movie is already in Radarr.", ephemeral=True
             )
             return
-        # try:
-        #     data = await bot.radarr.add_movie(tmdb_id, monitored=bot.settings.radarr_monitor)
-        #     title = data.get("title") or "Movie"
-        #     await interaction.followup.send(f"✅ Added **{title}** (tmdb:{tmdb_id}) to Radarr.", ephemeral=True)
-        # except Exception as e:
-        #     log.exception("Failed to add movie: %s", e)
-        #     await interaction.followup.send("❌ Failed to add the selected movie (it might already exist or Radarr refused).", ephemeral=True)
         # Start quality selection flow (no root folder prompt)
         view = QualityOnlyMovieView(tmdb_id)
         # First response already deferred; send a followup with components
