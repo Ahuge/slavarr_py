@@ -149,7 +149,9 @@ class SonarrClient:
         if r.status_code == 404:
             return None
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        log.info(f"get_series_by_id({series_id}): seasons in response = {len(data.get('seasons', []))}")
+        return data
 
     async def update_series(self, series_obj: dict) -> dict:
         """

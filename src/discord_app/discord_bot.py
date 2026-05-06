@@ -218,8 +218,10 @@ class SeriesSelectView(discord.ui.View):
         # Gather base season list from lookup (for new) and per-season file counts if it already exists
         lookup = await bot.sonarr.series_lookup(tvdb_id, tmdb_id)
         existing = await bot.sonarr.get_series_by_tvdb_or_tmdb(tvdb_id, tmdb_id)
-        existing_counts = await bot.sonarr.season_file_counts(existing["id"]) if existing else {}
+        log.info(f"Series lookup: tvdb={tvdb_id}, tmdb={tmdb_id}, existing_id={existing.get('id') if existing else None}")
+        existing_counts = await bot.sonarr.season_file_counts(existing["id"]) if existing and existing.get("id") else {}
         seasons_source = (existing.get("seasons") if existing else (lookup.get("seasons") if lookup else [])) or []
+        log.info(f"Seasons source: {[(s.get('seasonNumber'), s.get('monitored')) for s in seasons_source]}")
         view = SeriesAddWizardView(tvdb_id, tmdb_id, profiles, seasons_source, existing_counts, existing_id=(existing["id"] if existing else None))
         await interaction.followup.send("Pick a quality profile and the seasons you want:", view=view, ephemeral=True)
 
