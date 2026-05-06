@@ -222,7 +222,9 @@ class SeriesSelectView(discord.ui.View):
         existing_counts = await bot.sonarr.season_file_counts(existing["id"]) if existing and existing.get("id") else {}
         seasons_source = (existing.get("seasons") if existing else (lookup.get("seasons") if lookup else [])) or []
         log.info(f"Seasons source: {[(s.get('seasonNumber'), s.get('monitored')) for s in seasons_source]}")
-        view = SeriesAddWizardView(tvdb_id, tmdb_id, profiles, seasons_source, existing_counts, existing_id=(existing["id"] if existing else None))
+        is_new = existing is None
+        log.info(f"Is new series: {is_new}")
+        view = SeriesAddWizardView(tvdb_id, tmdb_id, profiles, seasons_source, existing_counts, existing_id=(existing["id"] if existing else None), is_new_series=is_new)
         await interaction.followup.send("Pick a quality profile and the seasons you want:", view=view, ephemeral=True)
 
 
@@ -474,7 +476,7 @@ class SeriesAddWizardView(discord.ui.View):
     If the series exists, we update monitored seasons and optionally profile;
     if new, we add with only the selected seasons monitored.
     """
-    def __init__(self, tvdb_id: int | None, tmdb_id: int | None, profiles: list[dict], seasons_source: list[dict], season_counts: dict[int, dict], existing_id: int | None, timeout: float | None = 180.0):
+    def __init__(self, tvdb_id: int | None, tmdb_id: int | None, profiles: list[dict], seasons_source: list[dict], season_counts: dict[int, dict], existing_id: int | None, is_new_series: bool = False, timeout: float | None = 180.0):
         super().__init__(timeout=timeout)
         self.tvdb_id = tvdb_id
         self.tmdb_id = tmdb_id
@@ -482,10 +484,11 @@ class SeriesAddWizardView(discord.ui.View):
         self.seasons_source = seasons_source
         self.season_counts = season_counts
         self.existing_id = existing_id
+        self.is_new_series = is_new_series
         self.selected_quality_id: int | None = None
         self.selected_seasons: set[int] = set()
         self.add_item(SeriesQualitySelect(profiles))
-        self.add_item(SeasonMultiSelect(seasons_source, season_counts))
+        self.add_item(SeasonMultiSelect(seasons_source, season_counts, is_new_series))
         self.add_item(ConfirmSeriesAddButton())
 
 class SeriesQualitySelect(discord.ui.Select):
@@ -503,16 +506,21 @@ class SeasonMultiSelect(discord.ui.Select):
     """
     Multiselect of seasons; labels show how many episodes already have files.
     """
-    def __init__(self, seasons_source: list[dict], season_counts: dict[int, dict]):
+    def __init__(self, seasons_source: list[dict], season_counts: dict[int, dict], is_new_series: bool = False):
         opts: list[discord.SelectOption] = []
         for s in seasons_source:
             num = s.get("seasonNumber")
             if num is None:
                 continue
-            counts = season_counts.get(num, {"total": 0, "have": 0})
-            total, have = counts.get("total", 0), counts.get("have", 0)
-            status = "✅" if total and have >= total else ("➖" if have > 0 else "○")
-            label = f"Season {num}  {status}  ({have}/{total} eps)"
+            if is_new_series:
+                # Don't show counts for new series (we don't know yet)
+                status = "○"
+                label = f"Season {num}  {status}"
+            else:
+                counts = season_counts.get(num, {"total": 0, "have": 0})
+                total, have = counts.get("total", 0), counts.get("have", 0)
+                status = "✅" if total and have >= total else ("➖" if have > 0 else "○")
+                label = f"Season {num}  {status}  ({have}/{total} eps)"
             opts.append(discord.SelectOption(label=label[:100], value=str(num)))
         placeholder = "Select one or more seasons…"
         super().__init__(placeholder=placeholder, min_values=1 if opts else 0, max_values=min(25, len(opts) or 1), options=opts or [discord.SelectOption(label="No seasons", value="")])
