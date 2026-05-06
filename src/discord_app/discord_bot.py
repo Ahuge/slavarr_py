@@ -123,13 +123,6 @@ class MovieSelectView(discord.ui.View):
                 "ℹ️ That movie is already in Radarr.", ephemeral=True
             )
             return
-        # try:
-        #     data = await bot.radarr.add_movie(tmdb_id, monitored=bot.settings.radarr_monitor)
-        #     title = data.get("title") or "Movie"
-        #     await interaction.followup.send(f"✅ Added **{title}** (tmdb:{tmdb_id}) to Radarr.", ephemeral=True)
-        # except Exception as e:
-        #     log.exception("Failed to add movie: %s", e)
-        #     await interaction.followup.send("❌ Failed to add the selected movie (it might already exist or Radarr refused).", ephemeral=True)
         # Start quality selection flow (no root folder prompt)
         view = QualityOnlyMovieView(tmdb_id)
         # First response already deferred; send a followup with components
@@ -225,9 +218,13 @@ class SeriesSelectView(discord.ui.View):
         # Gather base season list from lookup (for new) and per-season file counts if it already exists
         lookup = await bot.sonarr.series_lookup(tvdb_id, tmdb_id)
         existing = await bot.sonarr.get_series_by_tvdb_or_tmdb(tvdb_id, tmdb_id)
-        existing_counts = await bot.sonarr.season_file_counts(existing["id"]) if existing else {}
+        log.info(f"Series lookup: tvdb={tvdb_id}, tmdb={tmdb_id}, existing_id={existing.get('id') if existing else None}")
+        existing_counts = await bot.sonarr.season_file_counts(existing["id"]) if existing and existing.get("id") else {}
         seasons_source = (existing.get("seasons") if existing else (lookup.get("seasons") if lookup else [])) or []
-        view = SeriesAddWizardView(tvdb_id, tmdb_id, profiles, seasons_source, existing_counts, existing_id=(existing["id"] if existing else None))
+        log.info(f"Seasons source: {[(s.get('seasonNumber'), s.get('monitored')) for s in seasons_source]}")
+        is_new = existing is None
+        log.info(f"Is new series: {is_new}")
+        view = SeriesAddWizardView(tvdb_id, tmdb_id, profiles, seasons_source, existing_counts, existing_id=(existing["id"] if existing else None), is_new_series=is_new)
         await interaction.followup.send("Pick a quality profile and the seasons you want:", view=view, ephemeral=True)
 
 
@@ -387,9 +384,10 @@ class ContentCommands(commands.Cog):
         embed.add_field(name="State", value=state, inline=False)
         if q:
             pct = None
-            if q.get("size"):
+            size = q.get("size") or 0
+            if size > 0:
                 try:
-                    pct = 100 * (1 - (q.get("sizeleft", 0) / q.get("size", 1)))
+                    pct = 100 * (1 - (q.get("sizeleft", 0) / size))
                 except Exception:
                     pct = None
             qline = f"{q.get('status','queue')}"
@@ -456,11 +454,10 @@ class ContentCommands(commands.Cog):
         if q_for_series:
             first = q_for_series[0]
             pct_q = None
-            if first.get("size"):
+            size = first.get("size") or 0
+            if size > 0:
                 try:
-                    pct_q = 100 * (
-                        1 - (first.get("sizeleft", 0) / first.get("size", 1))
-                    )
+                    pct_q = 100 * (1 - (first.get("sizeleft", 0) / size))
                 except Exception:
                     pct_q = None
             qline = f"{first.get('status','queue')}"
@@ -479,7 +476,7 @@ class SeriesAddWizardView(discord.ui.View):
     If the series exists, we update monitored seasons and optionally profile;
     if new, we add with only the selected seasons monitored.
     """
-    def __init__(self, tvdb_id: int | None, tmdb_id: int | None, profiles: list[dict], seasons_source: list[dict], season_counts: dict[int, dict], existing_id: int | None, timeout: float | None = 180.0):
+    def __init__(self, tvdb_id: int | None, tmdb_id: int | None, profiles: list[dict], seasons_source: list[dict], season_counts: dict[int, dict], existing_id: int | None, is_new_series: bool = False, timeout: float | None = 180.0):
         super().__init__(timeout=timeout)
         self.tvdb_id = tvdb_id
         self.tmdb_id = tmdb_id
@@ -487,10 +484,11 @@ class SeriesAddWizardView(discord.ui.View):
         self.seasons_source = seasons_source
         self.season_counts = season_counts
         self.existing_id = existing_id
+        self.is_new_series = is_new_series
         self.selected_quality_id: int | None = None
         self.selected_seasons: set[int] = set()
         self.add_item(SeriesQualitySelect(profiles))
-        self.add_item(SeasonMultiSelect(seasons_source, season_counts))
+        self.add_item(SeasonMultiSelect(seasons_source, season_counts, is_new_series))
         self.add_item(ConfirmSeriesAddButton())
 
 class SeriesQualitySelect(discord.ui.Select):
@@ -508,16 +506,21 @@ class SeasonMultiSelect(discord.ui.Select):
     """
     Multiselect of seasons; labels show how many episodes already have files.
     """
-    def __init__(self, seasons_source: list[dict], season_counts: dict[int, dict]):
+    def __init__(self, seasons_source: list[dict], season_counts: dict[int, dict], is_new_series: bool = False):
         opts: list[discord.SelectOption] = []
         for s in seasons_source:
             num = s.get("seasonNumber")
             if num is None:
                 continue
-            counts = season_counts.get(num, {"total": 0, "have": 0})
-            total, have = counts.get("total", 0), counts.get("have", 0)
-            status = "✅" if total and have >= total else ("➖" if have > 0 else "○")
-            label = f"Season {num}  {status}  ({have}/{total} eps)"
+            if is_new_series:
+                # Don't show counts for new series (we don't know yet)
+                status = "○"
+                label = f"Season {num}  {status}"
+            else:
+                counts = season_counts.get(num, {"total": 0, "have": 0})
+                total, have = counts.get("total", 0), counts.get("have", 0)
+                status = "✅" if total and have >= total else ("➖" if have > 0 else "○")
+                label = f"Season {num}  {status}  ({have}/{total} eps)"
             opts.append(discord.SelectOption(label=label[:100], value=str(num)))
         placeholder = "Select one or more seasons…"
         super().__init__(placeholder=placeholder, min_values=1 if opts else 0, max_values=min(25, len(opts) or 1), options=opts or [discord.SelectOption(label="No seasons", value="")])
@@ -613,11 +616,13 @@ async def _render_movie_embed(bot: "SlavarrBot", movie_id: int) -> tuple[discord
     q = bot.radarr.summarize_queue_progress(await bot.radarr.get_queue(), movie_id)
     pct = None
     eta = None
-    if q and q.get("size"):
-        try:
-            pct = 100 * (1 - (q.get("sizeleft",0)/q.get("size",1)))
-        except Exception:
-            pct = None
+    if q:
+        size = q.get("size") or 0
+        if size > 0:
+            try:
+                pct = 100 * (1 - (q.get("sizeleft", 0) / size))
+            except Exception:
+                pct = None
         eta = q.get("timeleft")
     t_details = None
     if q and bot.transmission and q.get("downloadId"):
@@ -642,7 +647,8 @@ async def _render_movie_embed(bot: "SlavarrBot", movie_id: int) -> tuple[discord
         bar = _progress_bar(pct)
         eta_txt = f" • ETA {eta}" if eta else ""
         emb.add_field(name="State", value="⬇️ Downloading", inline=True)
-        emb.add_field(name="Progress", value=f"`{bar}` {pct:.1f if pct is not None else 0:.1f}％{eta_txt}", inline=False)
+        pct_str = f"{pct:.1f}" if pct is not None else "0.0"
+        emb.add_field(name="Progress", value=f"`{bar}` {pct_str}%{eta_txt}", inline=False)
         if t_details:
             emb.add_field(name="Transmission", value=t_details, inline=False)
         return emb, False

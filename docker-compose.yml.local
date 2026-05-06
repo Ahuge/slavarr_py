@@ -1,0 +1,10 @@
+services:
+  slavarr:
+    working_dir: /mnt/d/Discord/slavarr_py
+    build: /mnt/d/Discord/slavarr_py
+    env_file:
+      - /mnt/d/Discord/slavarr_py/.env
+    ports:
+      - "3001:3001"
+    volumes:
+      - /mnt/d/Discord/slavarr_py/data:/app/data

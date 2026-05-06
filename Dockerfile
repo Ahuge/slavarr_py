@@ -3,6 +3,7 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src
 
 WORKDIR /app
 COPY requirements.txt /app/
@@ -16,4 +17,5 @@ VOLUME ["/app/data"]
 ENV PORT=3001
 EXPOSE 3001
 
-CMD ["python","-m","src.app.main"]
+WORKDIR /app/src
+CMD ["python","-m","discord_app.main"]

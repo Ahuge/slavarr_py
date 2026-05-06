@@ -1,10 +1,11 @@
-version: "3.9"
 services:
   slavarr:
-    build: .
+    image: ghcr.io/ahuge/slavarr_py:549c0c05cf0ae9cd547012dc661512d027ec0a3e
     env_file:
-      - .env
+      - /share/CACHEDEV1_DATA/PlexRoot/ContainerConfig/slavarr/.env
+    network_mode: host
+    restart: unless-stopped
     ports:
       - "3001:3001"
     volumes:
-      - ./data:/app/data
+      - /share/CACHEDEV1_DATA/PlexRoot/ContainerConfig/slavarr/data:/app/data

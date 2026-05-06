@@ -1,9 +1,11 @@
 from typing import List, Dict, Any
 import httpx
+import logging
 from datetime import datetime, timezone
-from operator import itemgetter
 from collections import defaultdict
 from pydantic import BaseModel
+
+log = logging.getLogger(__name__)
 
 
 class SeriesResult(BaseModel):
@@ -19,12 +21,11 @@ class SonarrClient:
     def __init__(self, base_url: str, api_key: str):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
-        self._client = httpx.AsyncClient(timeout=10.0)
+        self._client = httpx.AsyncClient(timeout=30.0)
+        log.info(f"SonarrClient initialized: base_url={self.base_url}")
 
     async def series_lookup(self, tvdb_id: int | None, tmdb_id: int | None) -> dict | None:
-        """
-        Lookup a series via /series/lookup to get base metadata (incl. seasons list).
-        """
+        """Lookup a series via /series/lookup to get base metadata (incl. seasons list)."""
         headers = {"X-Api-Key": self.api_key}
         if tvdb_id:
             term = f"tvdb:{tvdb_id}"
@@ -32,7 +33,9 @@ class SonarrClient:
             term = f"tmdb:{tmdb_id}"
         else:
             return None
-        r = await self._client.get(f"{self.base_url}/api/v3/series/lookup", headers=headers, params={"term": term})
+        url = f"{self.base_url}/api/v3/series/lookup"
+        log.info(f"Looking up series: GET {url}?term={term}")
+        r = await self._client.get(url, headers=headers, params={"term": term})
         r.raise_for_status()
         return r.json()[0] if r.json() else None
 
@@ -40,6 +43,7 @@ class SonarrClient:
         url = f"{self.base_url}/api/v3/series/lookup"
         params = {"term": term}
         headers = {"X-Api-Key": self.api_key}
+        log.info(f"Searching Sonarr: GET {url}?term={term}")
         r = await self._client.get(url, params=params, headers=headers)
         r.raise_for_status()
         items = r.json()
@@ -78,18 +82,34 @@ class SonarrClient:
         """Return the Sonarr series (library item) for a given TVDB/TMDB id, or None."""
         headers = {"X-Api-Key": self.api_key}
         url_series = f"{self.base_url}/api/v3/series"
+        
+        # First try tvdbId only - this is the most specific
         if tvdb_id:
             r = await self._client.get(
                 url_series, headers=headers, params={"tvdbId": tvdb_id}
             )
+            log.info(f"get_series_by_tvdb_or_tmdb: GET {url_series}?tvdbId={tvdb_id} -> {r.status_code}")
             if r.status_code == 200 and r.json():
-                return r.json()[0]
+                results = r.json()
+                if results:
+                    log.info(f"Found by tvdbId={tvdb_id}: {len(results)} results, id={results[0].get('id')}")
+                    return results[0]
+        
+        # Only try tmdbId if tvdbId returned nothing - tmdbId is less specific
         if tmdb_id:
             r = await self._client.get(
                 url_series, headers=headers, params={"tmdbId": tmdb_id}
             )
+            log.info(f"get_series_by_tmdb: GET {url_series}?tmdbId={tmdb_id} -> {r.status_code}")
             if r.status_code == 200 and r.json():
-                return r.json()[0]
+                results = r.json()
+                # Only use if exactly ONE result - otherwise too ambiguous
+                if len(results) == 1:
+                    log.info(f"Found by tmdbId={tmdb_id}: exactly 1 result, id={results[0].get('id')}")
+                    return results[0]
+                else:
+                    log.warning(f"Found by tmdbId={tmdb_id}: {len(results)} results - refusing to use (ambiguous)")
+        log.info(f"No unique existing series found for tvdbId={tvdb_id}, tmdbId={tmdb_id}")
         return None
 
     async def get_queue(self) -> list[dict]:
@@ -145,7 +165,9 @@ class SonarrClient:
         if r.status_code == 404:
             return None
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        log.info(f"get_series_by_id({series_id}): seasons in response = {len(data.get('seasons', []))}")
+        return data
 
     async def update_series(self, series_obj: dict) -> dict:
         """
