@@ -3,7 +3,6 @@ from fastapi import FastAPI, Request, HTTPException, Header
 import logging
 from typing import Optional
 
-app = FastAPI(lifespan=lifespan)
 log = logging.getLogger(__name__)
 
 VALID_API_KEYS: set[str] = set()
@@ -15,8 +14,8 @@ EVENT_NAMES = {
     "rename": "Renamed",
     "health": "Health",
     "missing": "Missing",
-    " wanted": "Wanted",
-    "unmanagged": "Unmanaged",
+    "wanted": "Wanted",
+    "unmanaged": "Unmanaged",
 }
 
 RADARR_EVENTS = {"grab", "download", "upgrade", "rename", "health", "missing", "wanted", "unmanaged"}
@@ -61,6 +60,9 @@ def get_event_description(event_type: str, source: str, data: dict) -> str:
         return f"{source}: {title} - Renamed"
     else:
         return f"{source}: {title} - {event_type}"
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/healthz")
