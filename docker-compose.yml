@@ -1,21 +1,12 @@
 services:
   slavarr:
     image: ghcr.io/ahuge/slavarr_py:latest
-    container_name: slavarr
+    pull_policy: always
     env_file:
       - /share/CACHEDEV1_DATA/PlexRoot/ContainerConfig/slavarr/.env
+    network_mode: host
+    restart: unless-stopped
     ports:
       - "3001:3001"
-    network_mode: host
     volumes:
       - /share/CACHEDEV1_DATA/PlexRoot/ContainerConfig/slavarr/data:/app/data
-    restart: unless-stopped
-
-# For local development, use:
-#   docker-compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
-# 
-# docker-compose.local.yml:
-#   services:
-#     slavarr:
-#       build: .
-#       image: slavarr:local
