@@ -31,17 +31,21 @@ class Settings(BaseModel):
 
 
 def load_settings() -> Settings:
-    # Simple env loader; defer to dotenv if present
     from dotenv import load_dotenv
 
     load_dotenv()
-    return Settings(
+    
+    sonarr_url = os.getenv("SONARR_URL")
+    radarr_url = os.getenv("RADARR_URL")
+    plex_url = os.getenv("PLEX_URL")
+    
+    settings = Settings(
         discord_token=os.getenv("DISCORD_TOKEN", ""),
         discord_client_id=int(os.getenv("DISCORD_CLIENT_ID", "0")),
-        radarr_url=os.getenv("RADARR_URL", "http://localhost:7878").rstrip("/"),
+        radarr_url=radarr_url.rstrip("/") if radarr_url else "http://localhost:7878",
         radarr_api_key=os.getenv("RADARR_API_KEY", ""),
         radarr_monitor=os.getenv("RADARR_MONITOR", "true").lower() == "true",
-        sonarr_url=os.getenv("SONARR_URL"),
+        sonarr_url=sonarr_url.rstrip("/") if sonarr_url else None,
         sonarr_api_key=os.getenv("SONARR_API_KEY"),
         sonarr_monitor=os.getenv("SONARR_MONITOR", "true").lower() == "true",
         sonarr_root_folder=os.getenv("SONARR_ROOT_FOLDER", "/tv"),
@@ -50,7 +54,7 @@ def load_settings() -> Settings:
         db_path=os.getenv("DB_PATH", "/app/data/slavarr.db"),
         port=int(os.getenv("PORT", "3001")),
         invite_permissions=int(os.getenv("INVITE_PERMISSIONS", "414464720896")),
-        plex_url=os.getenv("PLEX_URL"),
+        plex_url=plex_url.rstrip("/") if plex_url else None,
         plex_token=os.getenv("PLEX_TOKEN"),
         plex_movies_section_id=int(os.getenv("PLEX_MOVIES_SECTION_ID"))
         if os.getenv("PLEX_MOVIES_SECTION_ID")
@@ -65,3 +69,10 @@ def load_settings() -> Settings:
         transmission_user=os.getenv("TRANSMISSION_USER"),
         transmission_password=os.getenv("TRANSMISSION_PASSWORD"),
     )
+    
+    # Debug logging
+    import logging
+    log = logging.getLogger(__name__)
+    log.debug(f"Loaded config: SONARR_URL={settings.sonarr_url}, RADARR_URL={settings.radarr_url}, PLEX_URL={settings.plex_url}")
+    
+    return settings

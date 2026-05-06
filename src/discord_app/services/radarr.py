@@ -1,7 +1,10 @@
 from typing import List, Dict, Any, Optional
 import httpx
+import logging
 from datetime import datetime, timezone
 from pydantic import BaseModel
+
+log = logging.getLogger(__name__)
 
 
 class MovieResult(BaseModel):
@@ -18,11 +21,13 @@ class RadarrClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self._client = httpx.AsyncClient(timeout=10.0)
+        log.info(f"RadarrClient initialized: base_url={self.base_url}")
 
     async def search_movies(self, term: str) -> List[MovieResult]:
         url = f"{self.base_url}/api/v3/movie/lookup"
         params = {"term": term}
         headers = {"X-Api-Key": self.api_key}
+        log.info(f"Searching Radarr: GET {url}?term={term}")
         r = await self._client.get(url, params=params, headers=headers)
         r.raise_for_status()
         items = r.json()
