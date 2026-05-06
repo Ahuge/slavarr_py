@@ -82,6 +82,8 @@ class SonarrClient:
         """Return the Sonarr series (library item) for a given TVDB/TMDB id, or None."""
         headers = {"X-Api-Key": self.api_key}
         url_series = f"{self.base_url}/api/v3/series"
+        
+        # First try tvdbId only - this is the most specific
         if tvdb_id:
             r = await self._client.get(
                 url_series, headers=headers, params={"tvdbId": tvdb_id}
@@ -89,8 +91,11 @@ class SonarrClient:
             log.info(f"get_series_by_tvdb_or_tmdb: GET {url_series}?tvdbId={tvdb_id} -> {r.status_code}")
             if r.status_code == 200 and r.json():
                 results = r.json()
-                log.info(f"Found by tvdbId={tvdb_id}: {len(results)} results, id={results[0].get('id') if results else None}")
-                return results[0]
+                if results:
+                    log.info(f"Found by tvdbId={tvdb_id}: {len(results)} results, id={results[0].get('id')}")
+                    return results[0]
+        
+        # Only try tmdbId if tvdbId returned nothing - tmdbId is less specific
         if tmdb_id:
             r = await self._client.get(
                 url_series, headers=headers, params={"tmdbId": tmdb_id}
@@ -98,9 +103,13 @@ class SonarrClient:
             log.info(f"get_series_by_tmdb: GET {url_series}?tmdbId={tmdb_id} -> {r.status_code}")
             if r.status_code == 200 and r.json():
                 results = r.json()
-                log.info(f"Found by tmdbId={tmdb_id}: {len(results)} results, id={results[0].get('id') if results else None}")
-                return results[0]
-        log.info(f"No existing series found for tvdbId={tvdb_id}, tmdbId={tmdb_id}")
+                # Only use if exactly ONE result - otherwise too ambiguous
+                if len(results) == 1:
+                    log.info(f"Found by tmdbId={tmdb_id}: exactly 1 result, id={results[0].get('id')}")
+                    return results[0]
+                else:
+                    log.warning(f"Found by tmdbId={tmdb_id}: {len(results)} results - refusing to use (ambiguous)")
+        log.info(f"No unique existing series found for tvdbId={tvdb_id}, tmdbId={tmdb_id}")
         return None
 
     async def get_queue(self) -> list[dict]:
