@@ -86,14 +86,21 @@ class SonarrClient:
             r = await self._client.get(
                 url_series, headers=headers, params={"tvdbId": tvdb_id}
             )
+            log.info(f"get_series_by_tvdb_or_tmdb: GET {url_series}?tvdbId={tvdb_id} -> {r.status_code}")
             if r.status_code == 200 and r.json():
-                return r.json()[0]
+                results = r.json()
+                log.info(f"Found by tvdbId={tvdb_id}: {len(results)} results, id={results[0].get('id') if results else None}")
+                return results[0]
         if tmdb_id:
             r = await self._client.get(
                 url_series, headers=headers, params={"tmdbId": tmdb_id}
             )
+            log.info(f"get_series_by_tmdb: GET {url_series}?tmdbId={tmdb_id} -> {r.status_code}")
             if r.status_code == 200 and r.json():
-                return r.json()[0]
+                results = r.json()
+                log.info(f"Found by tmdbId={tmdb_id}: {len(results)} results, id={results[0].get('id') if results else None}")
+                return results[0]
+        log.info(f"No existing series found for tvdbId={tvdb_id}, tmdbId={tmdb_id}")
         return None
 
     async def get_queue(self) -> list[dict]:
