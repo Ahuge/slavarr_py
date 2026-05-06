@@ -24,6 +24,21 @@ class SonarrClient:
         self._client = httpx.AsyncClient(timeout=10.0)
         log.info(f"SonarrClient initialized: base_url={self.base_url}")
 
+    async def series_lookup(self, tvdb_id: int | None, tmdb_id: int | None) -> dict | None:
+        """Lookup a series via /series/lookup to get base metadata (incl. seasons list)."""
+        headers = {"X-Api-Key": self.api_key}
+        if tvdb_id:
+            term = f"tvdb:{tvdb_id}"
+        elif tmdb_id:
+            term = f"tmdb:{tmdb_id}"
+        else:
+            return None
+        url = f"{self.base_url}/api/v3/series/lookup"
+        log.info(f"Looking up series: GET {url}?term={term}")
+        r = await self._client.get(url, headers=headers, params={"term": term})
+        r.raise_for_status()
+        return r.json()[0] if r.json() else None
+
     async def search_series(self, term: str) -> List[SeriesResult]:
         url = f"{self.base_url}/api/v3/series/lookup"
         params = {"term": term}
